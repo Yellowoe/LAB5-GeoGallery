@@ -7,6 +7,7 @@ import 'package:hive/hive.dart';
 import '../models/travel_entry.dart';
 import 'package:geocoding/geocoding.dart';
 
+/// Pantalla para agregar una nueva entrada del diario de viaje
 class AddEntryScreen extends StatefulWidget {
   const AddEntryScreen({super.key});
 
@@ -15,13 +16,14 @@ class AddEntryScreen extends StatefulWidget {
 }
 
 class _AddEntryScreenState extends State<AddEntryScreen> {
-  File? _imageFile;
-  Position? _position;
-  String? _locationName;
+  File? _imageFile;               // Imagen seleccionada o capturada
+  Position? _position;            // Posición GPS obtenida
+  String? _locationName;          // Nombre del lugar (ciudad, país)
 
-  final _formKey = GlobalKey<FormState>();
   final TextEditingController _commentController = TextEditingController();
 
+  /// Función para tomar una foto con la cámara
+  /// y luego obtener la ubicación automáticamente
   Future<void> _getImage() async {
     final picker = ImagePicker();
     final pickedFile = await picker.pickImage(source: ImageSource.camera);
@@ -29,65 +31,46 @@ class _AddEntryScreenState extends State<AddEntryScreen> {
     if (pickedFile != null) {
       final appDir = await getApplicationDocumentsDirectory();
       final fileName = DateTime.now().millisecondsSinceEpoch.toString();
-      final savedImage =
-          await File(pickedFile.path).copy('${appDir.path}/$fileName.jpg');
+      final savedImage = await File(pickedFile.path).copy('${appDir.path}/$fileName.jpg');
 
       setState(() {
         _imageFile = savedImage;
       });
+
+      await _getLocation(); // Captura la ubicación automáticamente
     }
   }
 
+  /// Función para obtener la ubicación GPS y convertirla en nombre de lugar
   Future<void> _getLocation() async {
-    bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
-    if (!serviceEnabled) {
-      await Geolocator.openLocationSettings();
-      return;
-    }
+    try {
+      final position = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.high,
+      );
 
-    LocationPermission permission = await Geolocator.checkPermission();
-    if (permission == LocationPermission.denied ||
-        permission == LocationPermission.deniedForever) {
-      permission = await Geolocator.requestPermission();
-      if (permission != LocationPermission.whileInUse &&
-          permission != LocationPermission.always) {
-        return;
-      }
-    }
+      final placemarks = await placemarkFromCoordinates(
+        position.latitude,
+        position.longitude,
+      );
 
-    Position position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high);
-
-    setState(() {
-      _position = position;
-    });
-
-    List<Placemark> placemarks = await placemarkFromCoordinates(
-      position.latitude,
-      position.longitude,
-    );
-
-    if (placemarks.isNotEmpty) {
       final place = placemarks.first;
-
-      String city = place.locality ??
-          place.subAdministrativeArea ??
-          place.administrativeArea ??
-          '';
+      String city = place.locality ?? place.subAdministrativeArea ?? place.administrativeArea ?? '';
       String country = place.country ?? '';
 
       setState(() {
+        _position = position;
         _locationName = city.isNotEmpty ? "$city, $country" : country;
       });
+    } catch (e) {
+      print("Error obteniendo ubicación: $e");
     }
   }
 
+  /// Función para guardar una nueva entrada en Hive
   Future<void> _saveEntry() async {
-    if (_imageFile == null ||
-        _position == null ||
-        !_formKey.currentState!.validate()) {
+    if (_imageFile == null || _position == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Falta imagen, ubicación o comentario')),
+        const SnackBar(content: Text('Debe tomar una foto primero')),
       );
       return;
     }
@@ -104,9 +87,14 @@ class _AddEntryScreenState extends State<AddEntryScreen> {
 
     await box.add(newEntry);
 
-    Navigator.pop(context, true); // ← Volver al home y actualizar
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('📍 Entrada guardada exitosamente')),
+    );
+
+    Navigator.pop(context, true); // Volver a la pantalla anterior
   }
 
+  /// Construcción del layout de la pantalla
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -115,37 +103,70 @@ class _AddEntryScreenState extends State<AddEntryScreen> {
         padding: const EdgeInsets.all(16),
         child: SingleChildScrollView(
           child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              // Botón para tomar foto (o mostrar la imagen si ya se tomó)
               _imageFile == null
-                  ? ElevatedButton.icon(
-                      icon: const Icon(Icons.camera_alt),
+                  ? OutlinedButton.icon(
+                      icon: const Icon(Icons.camera_alt, size: 28),
                       label: const Text("Tomar foto"),
+                      style: OutlinedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        textStyle: const TextStyle(fontSize: 18),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
                       onPressed: _getImage,
                     )
-                  : Image.file(_imageFile!, height: 200),
-              const SizedBox(height: 16),
-              ElevatedButton.icon(
-                icon: const Icon(Icons.my_location),
-                label: const Text("Obtener ubicación"),
-                onPressed: _getLocation,
-              ),
-              const SizedBox(height: 16),
-              Form(
-                key: _formKey,
-                child: TextFormField(
-                  controller: _commentController,
-                  decoration: const InputDecoration(
-                    labelText: "Comentario",
-                    border: OutlineInputBorder(),
+                  : ClipRRect(
+                      borderRadius: BorderRadius.circular(12),
+                      child: Image.file(
+                        _imageFile!,
+                        height: 200,
+                        fit: BoxFit.cover,
+                      ),
+                    ),
+
+              const SizedBox(height: 20),
+
+              // Mostrar ubicación si ya está disponible
+              if (_locationName != null)
+                Text(
+                  "📍 $_locationName",
+                  style: const TextStyle(fontSize: 16, color: Colors.black54),
+                ),
+
+              const SizedBox(height: 20),
+
+              // Campo de texto para comentario (opcional)
+              TextField(
+                controller: _commentController,
+                maxLines: 3,
+                decoration: InputDecoration(
+                  labelText: "Comentario (opcional)",
+                  hintText: "¿Qué estás recordando?",
+                  filled: true,
+                  fillColor: Colors.grey[100],
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
                   ),
-                  validator: (value) =>
-                      value == null || value.isEmpty ? 'Escribe algo' : null,
                 ),
               ),
-              const SizedBox(height: 24),
+
+              const SizedBox(height: 30),
+
+              // Botón para guardar la entrada
               ElevatedButton.icon(
                 icon: const Icon(Icons.save),
                 label: const Text("Guardar entrada"),
+                style: ElevatedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  textStyle: const TextStyle(fontSize: 18),
+                ),
                 onPressed: _saveEntry,
               ),
             ],
